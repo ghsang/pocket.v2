@@ -19,12 +19,24 @@ const ASSETS = [
 // Install event - cache all static assets
 sw.addEventListener('install', (event) => {
 	event.waitUntil(
-		caches
-			.open(CACHE)
-			.then((cache) => cache.addAll(ASSETS))
-			.then(() => {
-				sw.skipWaiting();
-			})
+		(async () => {
+			const cache = await caches.open(CACHE);
+			// Cache assets individually to avoid failing on single asset
+			await Promise.allSettled(
+				ASSETS.map(async (asset) => {
+					try {
+						const response = await fetch(asset);
+						if (response.ok) {
+							await cache.put(asset, response);
+						}
+					} catch {
+						// Skip failed assets
+						console.warn('Failed to cache:', asset);
+					}
+				})
+			);
+			sw.skipWaiting();
+		})()
 	);
 });
 
@@ -100,13 +112,18 @@ sw.addEventListener('fetch', (event) => {
 				return cachedResponse;
 			}
 
-			const response = await fetch(event.request);
-			// Cache successful responses
-			if (response.status === 200) {
-				const cache = await caches.open(CACHE);
-				cache.put(event.request, response.clone());
+			try {
+				const response = await fetch(event.request);
+				// Cache successful responses
+				if (response.status === 200) {
+					const cache = await caches.open(CACHE);
+					cache.put(event.request, response.clone());
+				}
+				return response;
+			} catch {
+				// Return offline fallback
+				return new Response('Offline', { status: 503 });
 			}
-			return response;
 		})()
 	);
 });

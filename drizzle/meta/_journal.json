@@ -15,6 +15,13 @@
       "when": 1764206503462,
       "tag": "0001_melodic_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1764634366179,
+      "tag": "0002_old_jimmy_woo",
+      "breakpoints": true
     }
   ]
 }
