@@ -21,8 +21,8 @@
 <!-- Offline Indicator -->
 <OfflineIndicator />
 
-<!-- User Header (when logged in) -->
-{#if data.user && showNav}
+<!-- User Header (only in dev mode) -->
+{#if dev && data.user && showNav}
 	<header
 		class="sticky top-0 z-30 flex items-center justify-between bg-white/80 px-4 py-3 backdrop-blur-sm"
 	>
@@ -32,17 +32,15 @@
 		</div>
 		<div class="flex items-center gap-2">
 			<span class="text-sm text-gray-600">{data.user.username}</span>
-			{#if dev}
-				<a
-					href="/login"
-					class="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500 hover:bg-gray-200"
-					onclick={() => {
-						document.cookie = 'session=; Max-Age=0; path=/';
-					}}
-				>
-					전환
-				</a>
-			{/if}
+			<a
+				href="/login"
+				class="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500 hover:bg-gray-200"
+				onclick={() => {
+					document.cookie = 'session=; Max-Age=0; path=/';
+				}}
+			>
+				전환
+			</a>
 		</div>
 	</header>
 {/if}
