@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import { fly, fade, slide } from 'svelte/transition';
 	import type { PageData, ActionData } from './$types';
 
@@ -61,26 +62,26 @@
 	}
 
 	function handleCreate() {
-		return async ({ result, update }: { result: any; update: () => Promise<void> }) => {
+		return async ({ result }: { result: any }) => {
 			if (result.type === 'success') {
 				resetForm();
+				await invalidateAll();
 			}
-			await update();
 		};
 	}
 
 	function handleUpdate() {
-		return async ({ result, update }: { result: any; update: () => Promise<void> }) => {
+		return async ({ result }: { result: any }) => {
 			if (result.type === 'success') {
 				closeEdit();
+				await invalidateAll();
 			}
-			await update();
 		};
 	}
 
 	function handleDelete() {
-		return async ({ update }: { update: () => Promise<void> }) => {
-			await update();
+		return async () => {
+			await invalidateAll();
 		};
 	}
 </script>
