@@ -9,7 +9,15 @@
 	let selectedCategoryId = $state<number | null>(null);
 	let amount = $state('');
 	let description = $state('');
-	let date = $state(new Date().toISOString().split('T')[0]);
+	// 한국 시간 기준 오늘 날짜
+	const getToday = () => {
+		const now = new Date();
+		const year = now.getFullYear();
+		const month = String(now.getMonth() + 1).padStart(2, '0');
+		const day = String(now.getDate()).padStart(2, '0');
+		return `${year}-${month}-${day}`;
+	};
+	let date = $state(getToday());
 	let showSuccess = $state(false);
 
 	// Derived selected category to show progress
