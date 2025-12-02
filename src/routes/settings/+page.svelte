@@ -361,7 +361,7 @@
 							bind:value={editDeduction}
 							required
 							min="0"
-							step="1000"
+							step="500"
 							placeholder="0"
 							class="w-full rounded-lg border border-gray-200 p-3 pr-10 focus:ring-2 focus:ring-black focus:outline-none"
 						/>
