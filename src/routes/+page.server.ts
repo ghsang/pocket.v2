@@ -24,8 +24,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Fetch all budget categories (shared)
 	const allCategories = await db.query.budgetCategories.findMany();
 
-	// Fetch all payment methods (shared)
-	const methods = await db.query.paymentMethods.findMany();
+	// Fetch payment methods owned by current user
+	const methods = await db.query.paymentMethods.findMany({
+		where: eq(paymentMethods.owner, user.username)
+	});
 
 	// Calculate usage for this month per category (all users' expenses)
 	const usage = await db
