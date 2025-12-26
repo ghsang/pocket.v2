@@ -490,19 +490,48 @@
 						초기 잔액
 						<span class="font-normal text-gray-400">(기존 잔액 보정)</span>
 					</label>
-					<div class="relative">
-						<span class="absolute top-1/2 left-3 -translate-y-1/2 text-gray-400">₩</span>
-						<input
-							id="edit-initial-balance"
-							type="number"
-							name="initialBalance"
-							bind:value={editingCategory.initialBalance}
-							class="w-full rounded-lg border border-gray-200 p-3 pl-8 focus:ring-2 focus:ring-black focus:outline-none"
-						/>
+					<div class="flex gap-2">
+						<button
+							type="button"
+							onclick={() => {
+								if (editingCategory) {
+									editingCategory.initialBalance = -Math.abs(editingCategory.initialBalance || 0);
+								}
+							}}
+							class="rounded-lg border px-3 py-2 text-sm font-medium transition-colors {editingCategory &&
+							editingCategory.initialBalance < 0
+								? 'border-red-500 bg-red-50 text-red-600'
+								: 'border-gray-200 text-gray-500 hover:bg-gray-50'}"
+						>
+							-
+						</button>
+						<button
+							type="button"
+							onclick={() => {
+								if (editingCategory) {
+									editingCategory.initialBalance = Math.abs(editingCategory.initialBalance || 0);
+								}
+							}}
+							class="rounded-lg border px-3 py-2 text-sm font-medium transition-colors {editingCategory &&
+							editingCategory.initialBalance >= 0
+								? 'border-green-500 bg-green-50 text-green-600'
+								: 'border-gray-200 text-gray-500 hover:bg-gray-50'}"
+						>
+							+
+						</button>
+						<div class="relative flex-1">
+							<span class="absolute top-1/2 left-3 -translate-y-1/2 text-gray-400">₩</span>
+							<input
+								id="edit-initial-balance"
+								type="number"
+								inputmode="numeric"
+								name="initialBalance"
+								bind:value={editingCategory.initialBalance}
+								class="w-full rounded-lg border border-gray-200 p-3 pl-8 focus:ring-2 focus:ring-black focus:outline-none"
+							/>
+						</div>
 					</div>
-					<p class="mt-1 text-xs text-gray-400">
-						앱 사용 전 기존 잔액이 있으면 입력하세요 (마이너스 가능)
-					</p>
+					<p class="mt-1 text-xs text-gray-400">+/- 버튼으로 부호를 선택하세요</p>
 				</div>
 
 				<div>
