@@ -1,7 +1,7 @@
 import { db } from '$lib/server/db';
 import { budgetCategories, paymentMethods, expenses } from '$lib/server/db/schema';
 import { fail } from '@sveltejs/kit';
-import { eq, sql, and, gte } from 'drizzle-orm';
+import { eq, sql, gte } from 'drizzle-orm';
 import type { PageServerLoad, Actions } from './$types';
 
 // Helper to get current month's first day
@@ -49,8 +49,19 @@ export const load: PageServerLoad = async ({ locals }) => {
 		};
 	});
 
+	// Sort categories: 생활비 -> 문화/여행비 -> 경조사비 -> 저축
+	const typeOrder: Record<string, number> = {
+		living: 0,
+		cultural: 1,
+		event: 2,
+		savings: 3
+	};
+	const sortedCategories = categoriesWithUsage.sort(
+		(a, b) => (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99)
+	);
+
 	return {
-		categories: categoriesWithUsage,
+		categories: sortedCategories,
 		paymentMethods: methods,
 		user: { id: user.id, username: user.username }
 	};

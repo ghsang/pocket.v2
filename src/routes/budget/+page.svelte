@@ -318,10 +318,14 @@
 
 					<!-- 누적 잔액 -->
 					<div class="rounded-lg bg-gray-50 p-2 text-xs">
-						{#if category.initialBalance > 0}
+						{#if category.initialBalance !== 0}
 							<div class="flex justify-between text-gray-600">
 								<span>초기 잔액</span>
-								<span>₩{new Intl.NumberFormat('ko-KR').format(category.initialBalance)}</span>
+								<span class={category.initialBalance < 0 ? 'text-red-600' : ''}>
+									{category.initialBalance < 0 ? '-' : ''}₩{new Intl.NumberFormat('ko-KR').format(
+										Math.abs(category.initialBalance)
+									)}
+								</span>
 							</div>
 						{/if}
 						<div class="flex justify-between text-gray-600">
@@ -345,10 +349,14 @@
 				{:else}
 					<!-- 저축 카테고리: 누적 잔액만 표시 -->
 					<div class="rounded-lg bg-green-50 p-2 text-xs">
-						{#if category.initialBalance > 0}
+						{#if category.initialBalance !== 0}
 							<div class="flex justify-between text-gray-600">
 								<span>초기 잔액</span>
-								<span>₩{new Intl.NumberFormat('ko-KR').format(category.initialBalance)}</span>
+								<span class={category.initialBalance < 0 ? 'text-red-600' : ''}>
+									{category.initialBalance < 0 ? '-' : ''}₩{new Intl.NumberFormat('ko-KR').format(
+										Math.abs(category.initialBalance)
+									)}
+								</span>
 							</div>
 						{/if}
 						<div class="flex justify-between text-gray-600">
@@ -492,7 +500,9 @@
 							class="w-full rounded-lg border border-gray-200 p-3 pl-8 focus:ring-2 focus:ring-black focus:outline-none"
 						/>
 					</div>
-					<p class="mt-1 text-xs text-gray-400">앱 사용 전 기존 잔액이 있으면 입력하세요</p>
+					<p class="mt-1 text-xs text-gray-400">
+						앱 사용 전 기존 잔액이 있으면 입력하세요 (마이너스 가능)
+					</p>
 				</div>
 
 				<div>

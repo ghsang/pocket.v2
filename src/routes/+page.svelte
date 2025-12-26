@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import { fly, fade } from 'svelte/transition';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
 	import type { PageData, ActionData } from './$types';
@@ -27,7 +28,7 @@
 
 	// Handle form submission animation
 	function handleSubmit() {
-		return async ({ result, update }: { result: any; update: () => Promise<void> }) => {
+		return async ({ result }: { result: any }) => {
 			if (result.type === 'success') {
 				showSuccess = true;
 				setTimeout(() => {
@@ -37,8 +38,10 @@
 				amount = '';
 				description = '';
 				selectedCategoryId = null;
+				date = getToday();
+				// Reload data to update category balances
+				await invalidateAll();
 			}
-			await update();
 		};
 	}
 </script>

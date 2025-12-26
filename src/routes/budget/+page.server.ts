@@ -83,8 +83,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 		orderBy: (bankAccounts, { asc }) => [asc(bankAccounts.bankName)]
 	});
 
-	return {
-		categories: categories.map((c) => {
+	// Sort categories: 생활비 -> 문화/여행비 -> 경조사비 -> 저축
+	const typeOrder: Record<string, number> = {
+		living: 0,
+		cultural: 1,
+		event: 2,
+		savings: 3
+	};
+
+	const sortedCategories = categories
+		.map((c) => {
 			const initialBalance = Number(c.initialBalance) || 0;
 			const totalDeposited = depositMap.get(c.id) || 0;
 			const totalSpent = totalExpenseMap.get(c.id) || 0;
@@ -100,7 +108,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 				totalSpent, // 누적 지출
 				balance // 누적 잔액
 			};
-		}),
+		})
+		.sort((a, b) => (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99));
+
+	return {
+		categories: sortedCategories,
 		allUsers: realUsers.map((u) => ({
 			id: u.id,
 			username: u.username
