@@ -17,6 +17,30 @@
 	let optimisticItems = $state<Map<number, boolean>>(new Map());
 	let optimisticSettlements = $state<Map<number, boolean>>(new Map());
 
+	// Clean up optimistic state when server data matches
+	$effect(() => {
+		if (data.existingDeposit?.items) {
+			for (const item of data.existingDeposit.items) {
+				if (optimisticItems.has(item.id) && optimisticItems.get(item.id) === item.isCompleted) {
+					optimisticItems.delete(item.id);
+				}
+			}
+		}
+	});
+
+	$effect(() => {
+		if (data.userSettlements) {
+			for (const settlement of data.userSettlements) {
+				if (
+					optimisticSettlements.has(settlement.id) &&
+					optimisticSettlements.get(settlement.id) === settlement.isCompleted
+				) {
+					optimisticSettlements.delete(settlement.id);
+				}
+			}
+		}
+	});
+
 	// Update deduction when data changes (e.g., after reset)
 	$effect(() => {
 		if (!data.existingDeposit) {
@@ -90,9 +114,6 @@
 		return async ({ update }: { update: (options?: { reset?: boolean }) => Promise<void> }) => {
 			await invalidateAll();
 			await update({ reset: false });
-			// Clear optimistic state after server response
-			optimisticItems.delete(itemId);
-			optimisticItems = optimisticItems;
 		};
 	}
 
@@ -105,9 +126,6 @@
 		return async ({ update }: { update: (options?: { reset?: boolean }) => Promise<void> }) => {
 			await invalidateAll();
 			await update({ reset: false });
-			// Clear optimistic state after server response
-			optimisticSettlements.delete(settlementId);
-			optimisticSettlements = optimisticSettlements;
 		};
 	}
 </script>
