@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import { fly, fade, slide } from 'svelte/transition';
 	import type { PageData, ActionData } from './$types';
 
@@ -57,9 +58,9 @@
 	};
 
 	// Handle checkbox toggle
-	function handleToggle(itemId: number, currentValue: boolean) {
-		return async ({ update }: { update: () => Promise<void> }) => {
-			await update();
+	function handleToggle() {
+		return async () => {
+			await invalidateAll();
 		};
 	}
 </script>
@@ -306,7 +307,7 @@
 						<form
 							method="POST"
 							action="?/completeItem"
-							use:enhance={() => handleToggle(item.id, item.isCompleted ?? false)}
+							use:enhance={handleToggle}
 							class="flex items-center gap-4"
 						>
 							<input type="hidden" name="itemId" value={item.id} />
@@ -417,11 +418,7 @@
 								<form
 									method="POST"
 									action="?/completeSettlement"
-									use:enhance={() => {
-										return async ({ update }) => {
-											await update();
-										};
-									}}
+									use:enhance={handleToggle}
 								>
 									<input type="hidden" name="settlementId" value={settlement.id} />
 									<input type="hidden" name="isCompleted" value={!settlement.isCompleted} />

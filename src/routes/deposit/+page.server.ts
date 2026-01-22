@@ -96,10 +96,11 @@ async function generateExpenseSettlements(month: string) {
 	}
 
 	// Create settlement records: 계좌 담당자 → 지출자
+	// 담당자 자신도 포함 (예산 계좌 → 개인 계좌로 송금)
 	const settlementsToCreate = [];
 	for (const data of Object.values(expensesByUserAndCategory)) {
-		// Skip if account holder is the same as the spender (자기가 자기 계좌에서 쓴 경우)
-		if (!data.accountHolder || data.accountHolder === data.username) continue;
+		// Skip if no account holder
+		if (!data.accountHolder) continue;
 
 		settlementsToCreate.push({
 			month,
