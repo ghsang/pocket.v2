@@ -57,10 +57,11 @@
 		living: '🏠'
 	};
 
-	// Handle checkbox toggle
-	function handleToggle() {
-		return async () => {
+	// Handle form submission with data refresh
+	function handleFormSubmit() {
+		return async ({ update }: { update: (options?: { reset?: boolean }) => Promise<void> }) => {
 			await invalidateAll();
+			await update({ reset: false });
 		};
 	}
 </script>
@@ -90,7 +91,7 @@
 				<p class="text-sm text-gray-500">{data.targetMonth} 지출을 정산합니다</p>
 			</div>
 
-			<form method="POST" action="?/createDeposit" use:enhance={handleToggle} class="space-y-4">
+			<form method="POST" action="?/createDeposit" use:enhance={handleFormSubmit} class="space-y-4">
 				<div>
 					<label for="salary" class="mb-1 block text-sm font-medium text-gray-700">월급</label>
 					<div class="relative">
@@ -307,7 +308,7 @@
 						<form
 							method="POST"
 							action="?/completeItem"
-							use:enhance={handleToggle}
+							use:enhance={handleFormSubmit}
 							class="flex items-center gap-4"
 						>
 							<input type="hidden" name="itemId" value={item.id} />
@@ -418,7 +419,7 @@
 								<form
 									method="POST"
 									action="?/completeSettlement"
-									use:enhance={handleToggle}
+									use:enhance={handleFormSubmit}
 								>
 									<input type="hidden" name="settlementId" value={settlement.id} />
 									<input type="hidden" name="isCompleted" value={!settlement.isCompleted} />
