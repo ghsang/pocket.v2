@@ -90,7 +90,7 @@
 				<p class="text-sm text-gray-500">{data.targetMonth} 지출을 정산합니다</p>
 			</div>
 
-			<form method="POST" action="?/createDeposit" use:enhance class="space-y-4">
+			<form method="POST" action="?/createDeposit" use:enhance={handleToggle} class="space-y-4">
 				<div>
 					<label for="salary" class="mb-1 block text-sm font-medium text-gray-700">월급</label>
 					<div class="relative">
