@@ -69,21 +69,23 @@
 
 	// Toggle checkbox (local only)
 	function toggleItem(id: number) {
-		if (checkedItems.has(id)) {
-			checkedItems.delete(id);
+		const newSet = new Set(checkedItems);
+		if (newSet.has(id)) {
+			newSet.delete(id);
 		} else {
-			checkedItems.add(id);
+			newSet.add(id);
 		}
-		checkedItems = checkedItems;
+		checkedItems = newSet;
 	}
 
 	function toggleSettlement(id: number) {
-		if (checkedSettlements.has(id)) {
-			checkedSettlements.delete(id);
+		const newSet = new Set(checkedSettlements);
+		if (newSet.has(id)) {
+			newSet.delete(id);
 		} else {
-			checkedSettlements.add(id);
+			newSet.add(id);
 		}
-		checkedSettlements = checkedSettlements;
+		checkedSettlements = newSet;
 	}
 </script>
 
