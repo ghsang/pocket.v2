@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, applyAction } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { fly, fade, slide } from 'svelte/transition';
 	import type { PageData, ActionData } from './$types';
@@ -61,9 +61,9 @@
 
 	// Handle form submission with data refresh
 	function handleFormSubmit() {
-		return async ({ update }: { update: (options?: { reset?: boolean }) => Promise<void> }) => {
+		return async ({ result }: { result: Parameters<typeof applyAction>[0] }) => {
 			await invalidateAll();
-			await update({ reset: false });
+			await applyAction(result);
 		};
 	}
 
