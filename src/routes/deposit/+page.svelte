@@ -13,38 +13,16 @@
 	let showMessage = $state(false);
 	let showResetConfirm = $state(false);
 
-	// Optimistic update state for checkboxes
-	let optimisticItems = $state<Map<number, boolean>>(new Map());
-	let optimisticSettlements = $state<Map<number, boolean>>(new Map());
-
-	// Clean up optimistic state when server data matches
-	$effect(() => {
-		if (data.existingDeposit?.items) {
-			for (const item of data.existingDeposit.items) {
-				if (optimisticItems.has(item.id) && optimisticItems.get(item.id) === item.isCompleted) {
-					optimisticItems.delete(item.id);
-				}
-			}
-		}
-	});
-
-	$effect(() => {
-		if (data.userSettlements) {
-			for (const settlement of data.userSettlements) {
-				if (
-					optimisticSettlements.has(settlement.id) &&
-					optimisticSettlements.get(settlement.id) === settlement.isCompleted
-				) {
-					optimisticSettlements.delete(settlement.id);
-				}
-			}
-		}
-	});
+	// Local checkbox state (not saved to server)
+	let checkedItems = $state<Set<number>>(new Set());
+	let checkedSettlements = $state<Set<number>>(new Set());
 
 	// Update deduction when data changes (e.g., after reset)
 	$effect(() => {
 		if (!data.existingDeposit) {
 			deduction = String(data.defaultDeduction || 0);
+			checkedItems = new Set();
+			checkedSettlements = new Set();
 		}
 	});
 
@@ -69,12 +47,8 @@
 	// 저축 = 월급 - 차감액
 	let savingsAmount = $derived(Math.max(0, Number(salary) - Number(deduction)));
 
-	let completedItems = $derived(
-		data.existingDeposit?.items.filter((i) => i.isCompleted).length || 0
-	);
-
 	let totalItems = $derived(data.existingDeposit?.items.length || 0);
-
+	let completedItems = $derived(checkedItems.size);
 	let progressPercentage = $derived(totalItems > 0 ? (completedItems / totalItems) * 100 : 0);
 
 	// Budget type icons
@@ -93,40 +67,23 @@
 		};
 	}
 
-	// Get item completed status with optimistic update
-	function isItemCompleted(itemId: number, serverValue: boolean): boolean {
-		return optimisticItems.has(itemId) ? optimisticItems.get(itemId)! : serverValue;
+	// Toggle checkbox (local only)
+	function toggleItem(id: number) {
+		if (checkedItems.has(id)) {
+			checkedItems.delete(id);
+		} else {
+			checkedItems.add(id);
+		}
+		checkedItems = checkedItems;
 	}
 
-	// Get settlement completed status with optimistic update
-	function isSettlementCompleted(settlementId: number, serverValue: boolean): boolean {
-		return optimisticSettlements.has(settlementId)
-			? optimisticSettlements.get(settlementId)!
-			: serverValue;
-	}
-
-	// Handle item toggle with optimistic update
-	function handleItemToggle(itemId: number, currentValue: boolean) {
-		// Optimistic update
-		optimisticItems.set(itemId, !currentValue);
-		optimisticItems = optimisticItems;
-
-		return async ({ update }: { update: (options?: { reset?: boolean }) => Promise<void> }) => {
-			await invalidateAll();
-			await update({ reset: false });
-		};
-	}
-
-	// Handle settlement toggle with optimistic update
-	function handleSettlementToggle(settlementId: number, currentValue: boolean) {
-		// Optimistic update
-		optimisticSettlements.set(settlementId, !currentValue);
-		optimisticSettlements = optimisticSettlements;
-
-		return async ({ update }: { update: (options?: { reset?: boolean }) => Promise<void> }) => {
-			await invalidateAll();
-			await update({ reset: false });
-		};
+	function toggleSettlement(id: number) {
+		if (checkedSettlements.has(id)) {
+			checkedSettlements.delete(id);
+		} else {
+			checkedSettlements.add(id);
+		}
+		checkedSettlements = checkedSettlements;
 	}
 </script>
 
@@ -363,24 +320,17 @@
 				<h3 class="font-bold text-gray-900">입금 항목</h3>
 
 				{#each data.existingDeposit.items as item, i (item.id)}
-					{@const completed = isItemCompleted(item.id, item.isCompleted ?? false)}
+					{@const completed = checkedItems.has(item.id)}
 					<div
 						class="rounded-xl border bg-white p-4 shadow-sm transition-colors {completed
 							? 'border-green-200 bg-green-50'
 							: 'border-gray-200'}"
 						in:fly={{ y: 20, duration: 300, delay: 150 + i * 50 }}
 					>
-						<form
-							method="POST"
-							action="?/completeItem"
-							use:enhance={() => handleItemToggle(item.id, item.isCompleted ?? false)}
-							class="flex items-center gap-4"
-						>
-							<input type="hidden" name="itemId" value={item.id} />
-							<input type="hidden" name="isCompleted" value={!item.isCompleted} />
-
+						<div class="flex items-center gap-4">
 							<button
-								type="submit"
+								type="button"
+								onclick={() => toggleItem(item.id)}
 								class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors {completed
 									? 'border-green-500 bg-green-500 text-white'
 									: 'border-gray-300 hover:border-gray-400'}"
@@ -421,7 +371,7 @@
 									₩{new Intl.NumberFormat('ko-KR').format(item.amount)}
 								</span>
 							</div>
-						</form>
+						</div>
 					</div>
 				{/each}
 			</div>
@@ -460,7 +410,7 @@
 			{/if}
 
 			<!-- Expense Settlement Section (지출 정산 - 내가 보내야 할 항목만) -->
-			{#if data.allDepositsCompleted && data.userSettlements.length > 0}
+			{#if data.userSettlements.length > 0}
 				<div
 					class="mt-6 rounded-2xl border-2 border-blue-200 bg-blue-50 p-4 shadow-sm"
 					in:fly={{ y: 20, duration: 300, delay: 350 }}
@@ -475,104 +425,94 @@
 
 					<div class="space-y-3">
 						{#each data.userSettlements as settlement, i (settlement.id)}
-							{@const settlementCompleted = isSettlementCompleted(settlement.id, settlement.isCompleted)}
+							{@const settlementCompleted = checkedSettlements.has(settlement.id)}
 							<div
 								class="rounded-xl border bg-white p-4 shadow-sm transition-colors {settlementCompleted
 									? 'border-green-200 bg-green-50'
 									: 'border-gray-200'}"
 								in:fly={{ y: 20, duration: 300, delay: 400 + i * 50 }}
 							>
-								<form
-									method="POST"
-									action="?/completeSettlement"
-									use:enhance={() => handleSettlementToggle(settlement.id, settlement.isCompleted)}
-								>
-									<input type="hidden" name="settlementId" value={settlement.id} />
-									<input type="hidden" name="isCompleted" value={!settlement.isCompleted} />
-
-									<!-- 상단: 카테고리, 금액, 체크 -->
-									<div class="mb-3 flex items-center justify-between">
-										<div class="flex items-center gap-2">
-											<span class="text-lg">{typeIcons[settlement.category?.type || 'living']}</span
-											>
-											<span class="font-medium text-gray-900"
-												>{settlement.category?.name || '미분류'}</span
-											>
-										</div>
-										<div class="flex items-center gap-3">
-											<span
-												class="text-lg font-bold {settlementCompleted
-													? 'text-gray-400'
-													: 'text-gray-900'}"
-											>
-												₩{new Intl.NumberFormat('ko-KR').format(settlement.amount)}
-											</span>
-											<button
-												type="submit"
-												class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition-colors
-													{settlementCompleted
-													? 'border-green-500 bg-green-500 text-white'
-													: 'border-blue-400 hover:border-blue-500 hover:bg-blue-50'}"
-											>
-												{#if settlementCompleted}
-													<svg
-														class="h-4 w-4"
-														fill="none"
-														viewBox="0 0 24 24"
-														stroke="currentColor"
-													>
-														<path
-															stroke-linecap="round"
-															stroke-linejoin="round"
-															stroke-width="3"
-															d="M5 13l4 4L19 7"
-														/>
-													</svg>
-												{/if}
-											</button>
-										</div>
+								<!-- 상단: 카테고리, 금액, 체크 -->
+								<div class="mb-3 flex items-center justify-between">
+									<div class="flex items-center gap-2">
+										<span class="text-lg">{typeIcons[settlement.category?.type || 'living']}</span>
+										<span class="font-medium text-gray-900"
+											>{settlement.category?.name || '미분류'}</span
+										>
 									</div>
-
-									<!-- 출금 계좌 (예산 계좌) -->
-									<div class="mb-2 rounded-lg bg-gray-50 p-2">
-										<p class="mb-1 text-xs font-medium text-gray-500">출금 계좌 (예산)</p>
-										{#if settlement.category?.account}
-											<p class="text-sm font-medium text-gray-800">
-												{settlement.category.account.bankName}
-												{settlement.category.account.accountNumber}
-											</p>
-											<p class="text-xs text-gray-500">
-												{settlement.category.account.accountHolder}
-											</p>
-										{:else}
-											<p class="text-sm text-gray-400">계좌 정보 없음</p>
-										{/if}
+									<div class="flex items-center gap-3">
+										<span
+											class="text-lg font-bold {settlementCompleted
+												? 'text-gray-400'
+												: 'text-gray-900'}"
+										>
+											₩{new Intl.NumberFormat('ko-KR').format(settlement.amount)}
+										</span>
+										<button
+											type="button"
+											onclick={() => toggleSettlement(settlement.id)}
+											class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition-colors
+												{settlementCompleted
+												? 'border-green-500 bg-green-500 text-white'
+												: 'border-blue-400 hover:border-blue-500 hover:bg-blue-50'}"
+										>
+											{#if settlementCompleted}
+												<svg
+													class="h-4 w-4"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="3"
+														d="M5 13l4 4L19 7"
+													/>
+												</svg>
+											{/if}
+										</button>
 									</div>
+								</div>
 
-									<!-- 입금 계좌 (받는 사람) -->
-									<div class="rounded-lg bg-blue-50 p-2">
-										<p class="mb-1 text-xs font-medium text-blue-600">
-											입금 계좌 ({settlement.toUser})
+								<!-- 출금 계좌 (예산 계좌) -->
+								<div class="mb-2 rounded-lg bg-gray-50 p-2">
+									<p class="mb-1 text-xs font-medium text-gray-500">출금 계좌 (예산)</p>
+									{#if settlement.category?.account}
+										<p class="text-sm font-medium text-gray-800">
+											{settlement.category.account.bankName}
+											{settlement.category.account.accountNumber}
 										</p>
-										{#if settlement.receiverAccount?.bankName}
-											<p class="text-sm font-medium text-gray-800">
-												{settlement.receiverAccount.bankName}
-												{settlement.receiverAccount.accountNumber}
-											</p>
-										{:else}
-											<p class="text-sm text-gray-400">계좌 정보 없음</p>
-										{/if}
-									</div>
-								</form>
+										<p class="text-xs text-gray-500">
+											{settlement.category.account.accountHolder}
+										</p>
+									{:else}
+										<p class="text-sm text-gray-400">계좌 정보 없음</p>
+									{/if}
+								</div>
+
+								<!-- 입금 계좌 (받는 사람) -->
+								<div class="rounded-lg bg-blue-50 p-2">
+									<p class="mb-1 text-xs font-medium text-blue-600">
+										입금 계좌 ({settlement.toUser})
+									</p>
+									{#if settlement.receiverAccount?.bankName}
+										<p class="text-sm font-medium text-gray-800">
+											{settlement.receiverAccount.bankName}
+											{settlement.receiverAccount.accountNumber}
+										</p>
+									{:else}
+										<p class="text-sm text-gray-400">계좌 정보 없음</p>
+									{/if}
+								</div>
 							</div>
 						{/each}
 					</div>
 
 					<!-- Total Summary -->
-					{#if data.userSettlements.some((s) => !s.isCompleted)}
-						{@const totalToSend = data.userSettlements
-							.filter((s) => !s.isCompleted)
-							.reduce((sum, s) => sum + s.amount, 0)}
+					{#if data.userSettlements.some((s) => !checkedSettlements.has(s.id))}
+						{@const uncheckedSettlements = data.userSettlements.filter((s) => !checkedSettlements.has(s.id))}
+						{@const totalToSend = uncheckedSettlements.reduce((sum, s) => sum + s.amount, 0)}
 						<div class="mt-4 rounded-xl bg-blue-600 p-4 text-white">
 							<div class="flex items-center justify-between">
 								<span class="text-sm">총 송금 금액</span>
@@ -594,36 +534,6 @@
 							<span class="font-medium">모든 지출 정산 완료!</span>
 						</div>
 					{/if}
-				</div>
-			{:else if data.existingDeposit?.isCompleted && !data.allDepositsCompleted}
-				<!-- Current user completed but waiting for others -->
-				<div
-					class="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4"
-					in:fly={{ y: 20, duration: 300, delay: 350 }}
-				>
-					<div class="flex items-center gap-3">
-						<span class="text-2xl">⏳</span>
-						<div>
-							<p class="font-medium text-amber-800">입금 완료!</p>
-							<p class="text-sm text-amber-600">
-								다른 사용자의 입금이 완료되면 지출 정산 내역이 표시됩니다.
-							</p>
-						</div>
-					</div>
-				</div>
-			{:else if data.allDepositsCompleted && data.userSettlements.length === 0}
-				<!-- All deposits completed but no settlements needed -->
-				<div
-					class="mt-6 rounded-xl border border-green-200 bg-green-50 p-4"
-					in:fly={{ y: 20, duration: 300, delay: 350 }}
-				>
-					<div class="flex items-center gap-3">
-						<span class="text-2xl">✅</span>
-						<div>
-							<p class="font-medium text-green-800">정산 완료!</p>
-							<p class="text-sm text-green-600">이번 달은 추가 지출 정산이 필요 없습니다.</p>
-						</div>
-					</div>
 				</div>
 			{/if}
 

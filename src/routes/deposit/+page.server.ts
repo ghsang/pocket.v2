@@ -183,6 +183,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	});
 	const allDepositsCompleted = allDeposits.length > 0 && allDeposits.every((d) => d.isCompleted);
 
+	// 지출 정산 항목 생성 (이미 존재하면 스킵)
+	await generateExpenseSettlements(targetMonthStart);
+
 	// Get expense settlements for this month (지출 정산 체크리스트)
 	// 현재 사용자가 송금해야 하는 항목만 조회 (fromUser = 현재 사용자)
 	const settlements = await db.query.expenseSettlements.findMany({
@@ -361,81 +364,6 @@ export const actions: Actions = {
 		}
 	},
 
-	completeItem: async ({ request, locals }) => {
-		const user = locals.user;
-		if (!user) {
-			return fail(401, { error: '로그인이 필요합니다.' });
-		}
-
-		const formData = await request.formData();
-		const itemId = formData.get('itemId');
-		const isCompleted = formData.get('isCompleted') === 'true';
-
-		if (!itemId) {
-			return fail(400, { error: '항목 ID가 필요합니다.' });
-		}
-
-		try {
-			await db
-				.update(depositItems)
-				.set({
-					isCompleted,
-					completedAt: isCompleted ? new Date() : null
-				})
-				.where(eq(depositItems.id, Number(itemId)));
-
-			// Check if all user's items are completed
-			const targetMonthStart = getTargetMonthStart();
-			const deposit = await db.query.monthlyDeposits.findFirst({
-				where: and(
-					eq(monthlyDeposits.userId, user.id),
-					eq(monthlyDeposits.month, targetMonthStart)
-				),
-				with: {
-					items: {
-						with: {
-							category: true
-						}
-					}
-				}
-			});
-
-			if (deposit) {
-				// Only check items that this user is responsible for
-				const userItems = deposit.items.filter(
-					(item) =>
-						item.category?.type === 'savings' || item.category?.depositManager === user.username
-				);
-				const allCompleted = userItems.every((item) => item.isCompleted);
-				if (allCompleted !== deposit.isCompleted) {
-					await db
-						.update(monthlyDeposits)
-						.set({
-							isCompleted: allCompleted,
-							depositedAt: allCompleted ? new Date() : null
-						})
-						.where(eq(monthlyDeposits.id, deposit.id));
-
-					// If all deposits are now completed, generate expense settlements
-					if (allCompleted) {
-						const allDeposits = await db.query.monthlyDeposits.findMany({
-							where: eq(monthlyDeposits.month, targetMonthStart)
-						});
-						const everyoneCompleted = allDeposits.every((d) => d.isCompleted);
-
-						if (everyoneCompleted) {
-							await generateExpenseSettlements(targetMonthStart);
-						}
-					}
-				}
-			}
-
-			return { success: true };
-		} catch {
-			return fail(500, { error: '업데이트 중 오류가 발생했습니다.' });
-		}
-	},
-
 	updateSalary: async ({ request, locals }) => {
 		const user = locals.user;
 		if (!user) {
@@ -490,35 +418,6 @@ export const actions: Actions = {
 			}
 
 			return { success: true, message: '월급이 업데이트되었습니다.' };
-		} catch {
-			return fail(500, { error: '업데이트 중 오류가 발생했습니다.' });
-		}
-	},
-
-	completeSettlement: async ({ request, locals }) => {
-		const user = locals.user;
-		if (!user) {
-			return fail(401, { error: '로그인이 필요합니다.' });
-		}
-
-		const formData = await request.formData();
-		const settlementId = formData.get('settlementId');
-		const isCompleted = formData.get('isCompleted') === 'true';
-
-		if (!settlementId) {
-			return fail(400, { error: '정산 ID가 필요합니다.' });
-		}
-
-		try {
-			await db
-				.update(expenseSettlements)
-				.set({
-					isCompleted,
-					completedAt: isCompleted ? new Date() : null
-				})
-				.where(eq(expenseSettlements.id, Number(settlementId)));
-
-			return { success: true };
 		} catch {
 			return fail(500, { error: '업데이트 중 오류가 발생했습니다.' });
 		}
