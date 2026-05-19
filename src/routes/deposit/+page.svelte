@@ -13,15 +13,16 @@
 	let showMessage = $state(false);
 	let showResetConfirm = $state(false);
 
-	// Local checkbox state (not saved to server)
-	let checkedItems = $state<Set<number>>(new Set());
+	// 입금 항목: 체크 상태를 서버에 저장(잔액 계산에 반영). optimistic update로 즉각 반영.
+	let optimisticItems = $state<Map<number, boolean>>(new Map());
+	// 지출 정산 체크박스는 잔액과 무관 → 클라이언트 로컬 추적만
 	let checkedSettlements = $state<Set<number>>(new Set());
 
 	// Update deduction when data changes (e.g., after reset)
 	$effect(() => {
 		if (!data.existingDeposit) {
 			deduction = String(data.defaultDeduction || 0);
-			checkedItems = new Set();
+			optimisticItems = new Map();
 			checkedSettlements = new Set();
 		}
 	});
@@ -47,8 +48,16 @@
 	// 저축 = 월급 - 차감액
 	let savingsAmount = $derived(Math.max(0, Number(salary) - Number(deduction)));
 
+	function isItemCompleted(itemId: number, serverValue: boolean): boolean {
+		return optimisticItems.has(itemId) ? optimisticItems.get(itemId)! : serverValue;
+	}
+
 	let totalItems = $derived(data.existingDeposit?.items.length || 0);
-	let completedItems = $derived(checkedItems.size);
+	let completedItems = $derived(
+		data.existingDeposit?.items.filter((item) =>
+			isItemCompleted(item.id, item.isCompleted ?? false)
+		).length || 0
+	);
 	let progressPercentage = $derived(totalItems > 0 ? (completedItems / totalItems) * 100 : 0);
 
 	// Budget type icons
@@ -67,15 +76,18 @@
 		};
 	}
 
-	// Toggle checkbox (local only)
-	function toggleItem(id: number) {
-		const newSet = new Set(checkedItems);
-		if (newSet.has(id)) {
-			newSet.delete(id);
-		} else {
-			newSet.add(id);
-		}
-		checkedItems = newSet;
+	function handleItemToggle(itemId: number, nextValue: boolean) {
+		const next = new Map(optimisticItems);
+		next.set(itemId, nextValue);
+		optimisticItems = next;
+
+		return async ({ result }: { result: Parameters<typeof applyAction>[0] }) => {
+			await invalidateAll();
+			await applyAction(result);
+			const cleared = new Map(optimisticItems);
+			cleared.delete(itemId);
+			optimisticItems = cleared;
+		};
 	}
 
 	function toggleSettlement(id: number) {
@@ -322,17 +334,24 @@
 				<h3 class="font-bold text-gray-900">입금 항목</h3>
 
 				{#each data.existingDeposit.items as item, i (item.id)}
-					{@const completed = checkedItems.has(item.id)}
+					{@const completed = isItemCompleted(item.id, item.isCompleted ?? false)}
 					<div
 						class="rounded-xl border bg-white p-4 shadow-sm transition-colors {completed
 							? 'border-green-200 bg-green-50'
 							: 'border-gray-200'}"
 						in:fly={{ y: 20, duration: 300, delay: 150 + i * 50 }}
 					>
-						<div class="flex items-center gap-4">
+						<form
+							method="POST"
+							action="?/completeItem"
+							use:enhance={() => handleItemToggle(item.id, !completed)}
+							class="flex items-center gap-4"
+						>
+							<input type="hidden" name="itemId" value={item.id} />
+							<input type="hidden" name="isCompleted" value={String(!completed)} />
+
 							<button
-								type="button"
-								onclick={() => toggleItem(item.id)}
+								type="submit"
 								class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors {completed
 									? 'border-green-500 bg-green-500 text-white'
 									: 'border-gray-300 hover:border-gray-400'}"
@@ -373,7 +392,7 @@
 									₩{new Intl.NumberFormat('ko-KR').format(item.amount)}
 								</span>
 							</div>
-						</div>
+						</form>
 					</div>
 				{/each}
 			</div>

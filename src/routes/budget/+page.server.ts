@@ -5,6 +5,7 @@ import {
 	bankAccounts,
 	expenses,
 	depositItems,
+	monthlyDeposits,
 	BUDGET_TYPES
 } from '$lib/server/db/schema';
 import { eq, and, gte, sql } from 'drizzle-orm';
@@ -49,14 +50,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// 이번 달 지출 맵
 	const monthlyExpenseMap = new Map(monthlyExpenses.map((e) => [e.categoryId, Number(e.total)]));
 
-	// 누적 입금액 (완료된 deposit_items 합계)
+	// 누적 입금액 — 월간 결산이 완료된(monthly_deposits.is_completed=true) 사용자의 입금분만 합산.
+	// 개별 체크박스(deposit_items.is_completed)는 진행 상태 추적용일 뿐 잔액에 영향 없음.
 	const totalDeposits = await db
 		.select({
 			categoryId: depositItems.categoryId,
 			total: sql<number>`COALESCE(sum(${depositItems.amount}), 0)`
 		})
 		.from(depositItems)
-		.where(eq(depositItems.isCompleted, true))
+		.innerJoin(monthlyDeposits, eq(depositItems.depositId, monthlyDeposits.id))
+		.where(eq(monthlyDeposits.isCompleted, true))
 		.groupBy(depositItems.categoryId);
 
 	const depositMap = new Map(totalDeposits.map((d) => [d.categoryId, Number(d.total)]));

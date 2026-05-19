@@ -53,12 +53,6 @@ async function generateExpenseSettlements(month: string) {
 	monthEnd.setDate(0);
 	const monthEndStr = monthEnd.toISOString().split('T')[0];
 
-	// Check if settlements already exist for this month
-	const existing = await db.query.expenseSettlements.findFirst({
-		where: eq(expenseSettlements.month, month)
-	});
-	if (existing) return; // Already generated
-
 	// Get all expenses for the target month with user info
 	const monthExpenses = await db.query.expenses.findMany({
 		where: and(gte(expenses.date, month), sql`${expenses.date} <= ${monthEndStr}`),
@@ -112,9 +106,14 @@ async function generateExpenseSettlements(month: string) {
 		});
 	}
 
-	if (settlementsToCreate.length > 0) {
-		await db.insert(expenseSettlements).values(settlementsToCreate);
-	}
+	// 지난달 지출 변경(소급 추가/수정/삭제)이 반영되도록 매번 재생성한다.
+	// 체크박스 상태는 클라이언트 로컬에서만 관리되므로 DB 재생성이 안전하다.
+	await db.transaction(async (tx) => {
+		await tx.delete(expenseSettlements).where(eq(expenseSettlements.month, month));
+		if (settlementsToCreate.length > 0) {
+			await tx.insert(expenseSettlements).values(settlementsToCreate);
+		}
+	});
 }
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -361,6 +360,66 @@ export const actions: Actions = {
 		} catch (e) {
 			console.error(e);
 			return fail(500, { error: '저장 중 오류가 발생했습니다.' });
+		}
+	},
+
+	completeItem: async ({ request, locals }) => {
+		const user = locals.user;
+		if (!user) {
+			return fail(401, { error: '로그인이 필요합니다.' });
+		}
+
+		const formData = await request.formData();
+		const itemId = formData.get('itemId');
+		const isCompleted = formData.get('isCompleted') === 'true';
+
+		if (!itemId) {
+			return fail(400, { error: '항목 ID가 필요합니다.' });
+		}
+
+		try {
+			await db
+				.update(depositItems)
+				.set({
+					isCompleted,
+					completedAt: isCompleted ? new Date() : null
+				})
+				.where(eq(depositItems.id, Number(itemId)));
+
+			// 사용자가 담당하는 모든 입금 항목이 완료되면 monthlyDeposits.isCompleted 동기화
+			const targetMonthStart = getTargetMonthStart();
+			const deposit = await db.query.monthlyDeposits.findFirst({
+				where: and(
+					eq(monthlyDeposits.userId, user.id),
+					eq(monthlyDeposits.month, targetMonthStart)
+				),
+				with: {
+					items: {
+						with: { category: true }
+					}
+				}
+			});
+
+			if (deposit) {
+				const userItems = deposit.items.filter(
+					(item) =>
+						item.category?.type === 'savings' || item.category?.depositManager === user.username
+				);
+				const allCompleted = userItems.length > 0 && userItems.every((item) => item.isCompleted);
+				if (allCompleted !== deposit.isCompleted) {
+					await db
+						.update(monthlyDeposits)
+						.set({
+							isCompleted: allCompleted,
+							depositedAt: allCompleted ? new Date() : null
+						})
+						.where(eq(monthlyDeposits.id, deposit.id));
+				}
+			}
+
+			return { success: true };
+		} catch {
+			return fail(500, { error: '업데이트 중 오류가 발생했습니다.' });
 		}
 	},
 
