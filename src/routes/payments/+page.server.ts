@@ -13,7 +13,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Load only current user's payment methods (owner = current username)
 	const methods = await db.query.paymentMethods.findMany({
 		where: eq(paymentMethods.owner, user.username),
-		orderBy: (methods, { asc }) => [asc(methods.createdAt)]
+		orderBy: (methods, { asc }) => [asc(methods.createdAt)],
+		with: { account: true }
 	});
 
 	// Fetch only current user's bank accounts for dropdown
@@ -41,10 +42,10 @@ export const actions: Actions = {
 
 		const formData = await request.formData();
 		const name = formData.get('name');
-		const linkedAccount = formData.get('linkedAccount');
+		const accountId = formData.get('accountId');
 		const isDefault = formData.get('isDefault') === 'true';
 
-		if (!name || !linkedAccount) {
+		if (!name || !accountId) {
 			return fail(400, { error: '모든 필수 항목을 입력해주세요.' });
 		}
 
@@ -60,7 +61,7 @@ export const actions: Actions = {
 			await db.insert(paymentMethods).values({
 				userId: user.id,
 				name: String(name),
-				linkedAccount: String(linkedAccount),
+				accountId: Number(accountId),
 				owner: user.username, // 자동으로 현재 사용자로 설정
 				isDefault
 			});
@@ -80,10 +81,10 @@ export const actions: Actions = {
 		const formData = await request.formData();
 		const id = formData.get('id');
 		const name = formData.get('name');
-		const linkedAccount = formData.get('linkedAccount');
+		const accountId = formData.get('accountId');
 		const isDefault = formData.get('isDefault') === 'true';
 
-		if (!id || !name || !linkedAccount) {
+		if (!id || !name || !accountId) {
 			return fail(400, { error: '필수 항목을 입력해주세요.' });
 		}
 
@@ -100,7 +101,7 @@ export const actions: Actions = {
 				.update(paymentMethods)
 				.set({
 					name: String(name),
-					linkedAccount: String(linkedAccount),
+					accountId: Number(accountId),
 					isDefault
 				})
 				.where(and(eq(paymentMethods.id, Number(id)), eq(paymentMethods.owner, user.username)));

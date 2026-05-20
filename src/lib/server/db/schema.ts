@@ -62,7 +62,9 @@ export const paymentMethods = pgTable('payment_methods', {
 	id: serial('id').primaryKey(),
 	name: text('name').notNull(), // 'Cash', 'Card', custom names
 	userId: integer('user_id').references(() => users.id),
-	linkedAccount: text('linked_account').notNull(), // Required: linked bank account
+	accountId: integer('account_id')
+		.references(() => bankAccounts.id)
+		.notNull(), // 연결된 은행 계좌
 	owner: text('owner'), // 소유자 (권혁상 or 이현경)
 	isDefault: boolean('is_default').default(false),
 	createdAt: timestamp('created_at').defaultNow()
@@ -190,7 +192,8 @@ export const expensesRelations = relations(expenses, ({ one }) => ({
 }));
 
 export const bankAccountsRelations = relations(bankAccounts, ({ many }) => ({
-	budgetCategories: many(budgetCategories)
+	budgetCategories: many(budgetCategories),
+	paymentMethods: many(paymentMethods)
 }));
 
 export const budgetCategoriesRelations = relations(budgetCategories, ({ one, many }) => ({
@@ -210,6 +213,10 @@ export const paymentMethodsRelations = relations(paymentMethods, ({ one, many })
 	user: one(users, {
 		fields: [paymentMethods.userId],
 		references: [users.id]
+	}),
+	account: one(bankAccounts, {
+		fields: [paymentMethods.accountId],
+		references: [bankAccounts.id]
 	}),
 	expenses: many(expenses)
 }));

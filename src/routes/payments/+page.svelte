@@ -10,7 +10,7 @@
 	let showAddForm = $state(false);
 	let editingMethod = $state<(typeof data.methods)[0] | null>(null);
 	let newName = $state('');
-	let newLinkedAccount = $state('');
+	let newAccountId = $state<number | ''>('');
 	let newIsDefault = $state(false);
 	let showMessage = $state(false);
 
@@ -30,7 +30,7 @@
 
 	function resetForm() {
 		newName = '';
-		newLinkedAccount = '';
+		newAccountId = '';
 		newIsDefault = false;
 		showAddForm = false;
 	}
@@ -105,7 +105,7 @@
 
 			<!-- Preset buttons -->
 			<div class="mb-4 flex flex-wrap gap-2">
-				{#each presetMethods as preset}
+				{#each presetMethods as preset (preset)}
 					<button
 						type="button"
 						onclick={() => selectPreset(preset)}
@@ -140,14 +140,14 @@
 					>
 					<select
 						id="new-account"
-						name="linkedAccount"
-						bind:value={newLinkedAccount}
+						name="accountId"
+						bind:value={newAccountId}
 						required
 						class="w-full rounded-lg border border-gray-200 p-3 focus:ring-2 focus:ring-black focus:outline-none"
 					>
 						<option value="">계좌 선택</option>
-						{#each data.accounts as account}
-							<option value="{account.bankName} {account.accountNumber}">
+						{#each data.accounts as account (account.id)}
+							<option value={account.id}>
 								{account.bankName}
 								{account.accountNumber}
 								{account.alias ? `(${account.alias})` : ''}
@@ -203,7 +203,11 @@
 								<span class="rounded-full bg-black px-2 py-0.5 text-xs text-white">기본</span>
 							{/if}
 						</div>
-						<p class="mt-1 text-sm text-gray-500">{method.linkedAccount}</p>
+						<p class="mt-1 text-sm text-gray-500">
+							{method.account.bankName}
+							{method.account.accountNumber}
+							{method.account.alias ? `(${method.account.alias})` : ''}
+						</p>
 					</div>
 
 					<div class="flex gap-2">
@@ -301,14 +305,14 @@
 					>
 					<select
 						id="edit-account"
-						name="linkedAccount"
-						bind:value={editingMethod.linkedAccount}
+						name="accountId"
+						bind:value={editingMethod.accountId}
 						required
 						class="w-full rounded-lg border border-gray-200 p-3 focus:ring-2 focus:ring-black focus:outline-none"
 					>
 						<option value="">계좌 선택</option>
-						{#each data.accounts as account}
-							<option value="{account.bankName} {account.accountNumber}">
+						{#each data.accounts as account (account.id)}
+							<option value={account.id}>
 								{account.bankName}
 								{account.accountNumber}
 								{account.alias ? `(${account.alias})` : ''}

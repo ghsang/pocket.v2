@@ -145,7 +145,9 @@
 			>
 				<option value="" disabled selected>결제 수단 선택</option>
 				{#each data.paymentMethods as method (method.id)}
-					<option value={method.id}>{method.name} ({method.linkedAccount})</option>
+					<option value={method.id}
+						>{method.name} ({method.account.bankName} {method.account.accountNumber})</option
+					>
 				{/each}
 			</select>
 			{#if data.paymentMethods.length === 0}

@@ -62,7 +62,8 @@ async function generateExpenseSettlements(month: string) {
 				with: {
 					account: true
 				}
-			}
+			},
+			paymentMethod: true
 		}
 	});
 
@@ -74,6 +75,16 @@ async function generateExpenseSettlements(month: string) {
 
 	for (const expense of monthExpenses) {
 		if (!expense.category || expense.category.type === 'savings') continue;
+
+		// 결제수단의 연결 계좌가 카테고리 예산 계좌와 동일하면 정산 제외
+		// (이미 예산 계좌에서 직접 출금되었으므로 송금이 불필요)
+		if (
+			expense.paymentMethod &&
+			expense.category.accountId &&
+			expense.paymentMethod.accountId === expense.category.accountId
+		) {
+			continue;
+		}
 
 		const key = `${expense.categoryId}-${expense.user?.username}`;
 		const accountHolder = expense.category.account?.accountHolder || null;
