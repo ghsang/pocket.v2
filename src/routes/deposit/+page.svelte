@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { enhance, applyAction } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { fly, fade, slide } from 'svelte/transition';
+	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -14,16 +16,26 @@
 	let showResetConfirm = $state(false);
 
 	// 입금 항목: 체크 상태를 서버에 저장(잔액 계산에 반영). optimistic update로 즉각 반영.
-	let optimisticItems = $state<Map<number, boolean>>(new Map());
+	const optimisticItems = new SvelteMap<number, boolean>();
+	const pendingItems = new SvelteSet<number>();
 	// 지출 정산 체크박스는 잔액과 무관 → 클라이언트 로컬 추적만
-	let checkedSettlements = $state<Set<number>>(new Set());
+	const checkedSettlements = new SvelteSet<number>();
 
 	// Update deduction when data changes (e.g., after reset)
 	$effect(() => {
 		if (!data.existingDeposit) {
 			deduction = String(data.defaultDeduction || 0);
-			optimisticItems = new Map();
-			checkedSettlements = new Set();
+			optimisticItems.clear();
+			pendingItems.clear();
+			checkedSettlements.clear();
+			return;
+		}
+
+		for (const [itemId, optimisticValue] of optimisticItems) {
+			const serverItem = data.existingDeposit.items.find((item) => item.id === itemId);
+			if (!serverItem || (serverItem.isCompleted ?? false) === optimisticValue) {
+				optimisticItems.delete(itemId);
+			}
 		}
 	});
 
@@ -76,28 +88,42 @@
 		};
 	}
 
-	function handleItemToggle(itemId: number, nextValue: boolean) {
-		const next = new Map(optimisticItems);
-		next.set(itemId, nextValue);
-		optimisticItems = next;
+	function handleItemToggle(itemId: number): SubmitFunction {
+		return ({ cancel, formData }) => {
+			if (pendingItems.has(itemId)) {
+				cancel();
+				return;
+			}
 
-		return async ({ result }: { result: Parameters<typeof applyAction>[0] }) => {
-			await invalidateAll();
-			await applyAction(result);
-			const cleared = new Map(optimisticItems);
-			cleared.delete(itemId);
-			optimisticItems = cleared;
+			const nextValue = formData.get('isCompleted') === 'true';
+			optimisticItems.set(itemId, nextValue);
+			pendingItems.add(itemId);
+
+			return async ({ result, update }) => {
+				try {
+					await update({ reset: false });
+				} finally {
+					pendingItems.delete(itemId);
+
+					if (result.type !== 'success') {
+						optimisticItems.delete(itemId);
+					} else {
+						const serverItem = data.existingDeposit?.items.find((item) => item.id === itemId);
+						if (!serverItem || (serverItem.isCompleted ?? false) === nextValue) {
+							optimisticItems.delete(itemId);
+						}
+					}
+				}
+			};
 		};
 	}
 
 	function toggleSettlement(id: number) {
-		const newSet = new Set(checkedSettlements);
-		if (newSet.has(id)) {
-			newSet.delete(id);
+		if (checkedSettlements.has(id)) {
+			checkedSettlements.delete(id);
 		} else {
-			newSet.add(id);
+			checkedSettlements.add(id);
 		}
-		checkedSettlements = newSet;
 	}
 </script>
 
@@ -344,7 +370,7 @@
 						<form
 							method="POST"
 							action="?/completeItem"
-							use:enhance={() => handleItemToggle(item.id, !completed)}
+							use:enhance={handleItemToggle(item.id)}
 							class="flex items-center gap-4"
 						>
 							<input type="hidden" name="itemId" value={item.id} />
@@ -352,9 +378,10 @@
 
 							<button
 								type="submit"
+								disabled={pendingItems.has(item.id)}
 								class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors {completed
 									? 'border-green-500 bg-green-500 text-white'
-									: 'border-gray-300 hover:border-gray-400'}"
+									: 'border-gray-300 hover:border-gray-400'} disabled:cursor-wait disabled:opacity-60"
 							>
 								{#if completed}
 									<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -372,9 +399,7 @@
 								<div class="flex items-center gap-2">
 									<span class="text-lg">{typeIcons[item.category?.type || 'living']}</span>
 									<span
-										class="font-medium {completed
-											? 'text-gray-500 line-through'
-											: 'text-gray-900'}"
+										class="font-medium {completed ? 'text-gray-500 line-through' : 'text-gray-900'}"
 									>
 										{item.category?.name || '미분류'}
 									</span>
@@ -478,12 +503,7 @@
 												: 'border-blue-400 hover:border-blue-500 hover:bg-blue-50'}"
 										>
 											{#if settlementCompleted}
-												<svg
-													class="h-4 w-4"
-													fill="none"
-													viewBox="0 0 24 24"
-													stroke="currentColor"
-												>
+												<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 													<path
 														stroke-linecap="round"
 														stroke-linejoin="round"
@@ -532,7 +552,9 @@
 
 					<!-- Total Summary -->
 					{#if data.userSettlements.some((s) => !checkedSettlements.has(s.id))}
-						{@const uncheckedSettlements = data.userSettlements.filter((s) => !checkedSettlements.has(s.id))}
+						{@const uncheckedSettlements = data.userSettlements.filter(
+							(s) => !checkedSettlements.has(s.id)
+						)}
 						{@const totalToSend = uncheckedSettlements.reduce((sum, s) => sum + s.amount, 0)}
 						<div class="mt-4 rounded-xl bg-blue-600 p-4 text-white">
 							<div class="flex items-center justify-between">

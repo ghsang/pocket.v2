@@ -51,4 +51,37 @@ test.describe('PWA Features', () => {
 
 		expect(script).toBe(true);
 	});
+
+	test('service worker prefers the network for dynamic GET requests', async ({ page }) => {
+		await page.goto('/login');
+		await page.evaluate(async () => {
+			await navigator.serviceWorker.ready;
+		});
+
+		if (!(await page.evaluate(() => Boolean(navigator.serviceWorker.controller)))) {
+			await page.reload();
+		}
+		await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+
+		const result = await page.evaluate(async () => {
+			const requestPath = '/login?service-worker-network-first-probe=1';
+			const cacheName = (await caches.keys()).find((name) => name.startsWith('cache-'));
+			if (!cacheName) {
+				throw new Error('App cache was not created');
+			}
+			const cache = await caches.open(cacheName);
+			await cache.put(requestPath, new Response('stale cached response', { status: 200 }));
+
+			try {
+				const response = await fetch(requestPath);
+				return { status: response.status, body: await response.text() };
+			} finally {
+				await cache.delete(requestPath);
+			}
+		});
+
+		expect(result.status).toBe(200);
+		expect(result.body).toContain('<!doctype html>');
+		expect(result.body).not.toContain('stale cached response');
+	});
 });

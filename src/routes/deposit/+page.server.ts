@@ -11,118 +11,133 @@ import {
 } from '$lib/server/db/schema';
 import { eq, and, gte, sql, inArray } from 'drizzle-orm';
 import { fail, redirect } from '@sveltejs/kit';
+import { getSettlementMonth } from '$lib/server/settlement-month';
 import type { PageServerLoad, Actions } from './$types';
 
-// Helper functions
-// 정산 대상월 = 지난달 (지난달 지출을 이번달에 정산)
-function getTargetMonthStart(): string {
-	const now = new Date();
-	const year = now.getFullYear();
-	const month = now.getMonth(); // 0-indexed, so this is last month when we subtract nothing for "last month"
-	// 지난달 1일
-	const lastMonth = month === 0 ? 12 : month;
-	const lastYear = month === 0 ? year - 1 : year;
-	return `${lastYear}-${String(lastMonth).padStart(2, '0')}-01`;
+type GeneratedSettlement = {
+	month: string;
+	categoryId: number;
+	fromUser: string;
+	toUser: string;
+	amount: string;
+	isCompleted: boolean;
+};
+
+function getSettlementKey(settlement: {
+	categoryId: number;
+	fromUser: string;
+	toUser: string;
+}): string {
+	return JSON.stringify([settlement.categoryId, settlement.fromUser, settlement.toUser]);
 }
 
-function getTargetMonthEnd(): string {
-	const now = new Date();
-	const year = now.getFullYear();
-	const month = now.getMonth(); // current month (0-indexed)
-	// 지난달 마지막 날 = 이번달 0일
-	const lastDay = new Date(year, month, 0).getDate();
-	const lastMonth = month === 0 ? 12 : month;
-	const lastYear = month === 0 ? year - 1 : year;
-	return `${lastYear}-${String(lastMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-}
-
-function getTargetMonthLabel(): string {
-	const now = new Date();
-	const month = now.getMonth();
-	const lastMonth = month === 0 ? 12 : month;
-	const lastYear = month === 0 ? now.getFullYear() - 1 : now.getFullYear();
-	return `${lastYear}년 ${lastMonth}월`;
-}
-
-// Generate expense settlements when all deposits are completed
+// Reconcile expense settlements for the target month.
 // 각 사용자가 각 카테고리에서 얼마나 지출했는지 계산하고,
 // 해당 카테고리 계좌 담당자가 지출자에게 송금해야 하는 항목 생성
-async function generateExpenseSettlements(month: string) {
-	const monthEnd = new Date(month);
-	monthEnd.setMonth(monthEnd.getMonth() + 1);
-	monthEnd.setDate(0);
-	const monthEndStr = monthEnd.toISOString().split('T')[0];
-
-	// Get all expenses for the target month with user info
-	const monthExpenses = await db.query.expenses.findMany({
-		where: and(gte(expenses.date, month), sql`${expenses.date} <= ${monthEndStr}`),
-		with: {
-			user: true,
-			category: {
-				with: {
-					account: true
-				}
-			},
-			paymentMethod: true
-		}
-	});
-
-	// Group by category and user (who spent)
-	const expensesByUserAndCategory: Record<
-		string,
-		{ categoryId: number; username: string; total: number; accountHolder: string | null }
-	> = {};
-
-	for (const expense of monthExpenses) {
-		if (!expense.category || expense.category.type === 'savings') continue;
-
-		// 결제수단의 연결 계좌가 카테고리 예산 계좌와 동일하면 정산 제외
-		// (이미 예산 계좌에서 직접 출금되었으므로 송금이 불필요)
-		if (
-			expense.paymentMethod &&
-			expense.category.accountId &&
-			expense.paymentMethod.accountId === expense.category.accountId
-		) {
-			continue;
-		}
-
-		const key = `${expense.categoryId}-${expense.user?.username}`;
-		const accountHolder = expense.category.account?.accountHolder || null;
-
-		if (!expensesByUserAndCategory[key]) {
-			expensesByUserAndCategory[key] = {
-				categoryId: expense.categoryId!,
-				username: expense.user?.username || 'Unknown',
-				total: 0,
-				accountHolder
-			};
-		}
-		expensesByUserAndCategory[key].total += Number(expense.amount);
-	}
-
-	// Create settlement records: 계좌 담당자 → 지출자
-	// 담당자 자신도 포함 (예산 계좌 → 개인 계좌로 송금)
-	const settlementsToCreate = [];
-	for (const data of Object.values(expensesByUserAndCategory)) {
-		// Skip if no account holder
-		if (!data.accountHolder) continue;
-
-		settlementsToCreate.push({
-			month,
-			categoryId: data.categoryId,
-			fromUser: data.accountHolder, // 송금자 (계좌 담당자)
-			toUser: data.username, // 수신자 (지출한 사람)
-			amount: String(data.total),
-			isCompleted: false
-		});
-	}
-
-	// 지난달 지출 변경(소급 추가/수정/삭제)이 반영되도록 매번 재생성한다.
-	// 체크박스 상태는 클라이언트 로컬에서만 관리되므로 DB 재생성이 안전하다.
+async function generateExpenseSettlements(month: string, monthEnd: string) {
 	await db.transaction(async (tx) => {
-		await tx.delete(expenseSettlements).where(eq(expenseSettlements.month, month));
-		if (settlementsToCreate.length > 0) {
-			await tx.insert(expenseSettlements).values(settlementsToCreate);
+		await tx.execute(
+			sql`select pg_advisory_xact_lock(hashtext(${`expense-settlements:${month}`}))`
+		);
+
+		// Get all expenses after taking the month lock so concurrent loads reconcile in order.
+		const monthExpenses = await tx.query.expenses.findMany({
+			where: and(gte(expenses.date, month), sql`${expenses.date} <= ${monthEnd}`),
+			with: {
+				user: true,
+				category: {
+					with: {
+						account: true
+					}
+				},
+				paymentMethod: true
+			}
+		});
+
+		// Group by category and user (who spent)
+		const expensesByUserAndCategory: Record<
+			string,
+			{ categoryId: number; username: string; total: number; accountHolder: string | null }
+		> = {};
+
+		for (const expense of monthExpenses) {
+			if (!expense.category || expense.category.type === 'savings') continue;
+
+			// 결제수단의 연결 계좌가 카테고리 예산 계좌와 동일하면 정산 제외
+			// (이미 예산 계좌에서 직접 출금되었으므로 송금이 불필요)
+			if (
+				expense.paymentMethod &&
+				expense.category.accountId &&
+				expense.paymentMethod.accountId === expense.category.accountId
+			) {
+				continue;
+			}
+
+			const key = JSON.stringify([expense.categoryId, expense.user?.username]);
+			const accountHolder = expense.category.account?.accountHolder || null;
+
+			if (!expensesByUserAndCategory[key]) {
+				expensesByUserAndCategory[key] = {
+					categoryId: expense.categoryId!,
+					username: expense.user?.username || 'Unknown',
+					total: 0,
+					accountHolder
+				};
+			}
+			expensesByUserAndCategory[key].total += Number(expense.amount);
+		}
+
+		// Create settlement records: 계좌 담당자 → 지출자
+		// 담당자 자신도 포함 (예산 계좌 → 개인 계좌로 송금)
+		const generatedSettlements: GeneratedSettlement[] = [];
+		for (const data of Object.values(expensesByUserAndCategory)) {
+			if (!data.accountHolder) continue;
+
+			generatedSettlements.push({
+				month,
+				categoryId: data.categoryId,
+				fromUser: data.accountHolder,
+				toUser: data.username,
+				amount: data.total.toFixed(2),
+				isCompleted: false
+			});
+		}
+
+		// Preserve IDs only when both the business key and amount are unchanged.
+		// A changed amount gets a new ID so a previously checked local item is shown again.
+		const existingSettlements = await tx
+			.select()
+			.from(expenseSettlements)
+			.where(eq(expenseSettlements.month, month));
+		const existingByKey = new Map<string, (typeof existingSettlements)[number]>();
+
+		for (const settlement of existingSettlements) {
+			const key = getSettlementKey(settlement);
+			if (!existingByKey.has(key)) {
+				existingByKey.set(key, settlement);
+			}
+		}
+
+		const preservedIds = new Set<number>();
+		const replacedIds = new Set<number>();
+		for (const settlement of generatedSettlements) {
+			const existing = existingByKey.get(getSettlementKey(settlement));
+			if (existing?.amount === settlement.amount) {
+				preservedIds.add(existing.id);
+			} else {
+				if (existing) {
+					replacedIds.add(existing.id);
+					await tx.delete(expenseSettlements).where(eq(expenseSettlements.id, existing.id));
+				}
+				await tx.insert(expenseSettlements).values(settlement);
+			}
+		}
+
+		const obsoleteIds = existingSettlements
+			.filter((settlement) => !preservedIds.has(settlement.id) && !replacedIds.has(settlement.id))
+			.map((settlement) => settlement.id);
+		if (obsoleteIds.length > 0) {
+			await tx.delete(expenseSettlements).where(inArray(expenseSettlements.id, obsoleteIds));
 		}
 	});
 }
@@ -133,12 +148,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		throw redirect(302, '/login');
 	}
 
-	const targetMonthStart = getTargetMonthStart();
-	const targetMonthEnd = getTargetMonthEnd();
+	const targetMonth = getSettlementMonth();
 
 	// Check existing deposit for target month (지난달 정산)
 	const existingDeposit = await db.query.monthlyDeposits.findFirst({
-		where: and(eq(monthlyDeposits.userId, user.id), eq(monthlyDeposits.month, targetMonthStart)),
+		where: and(eq(monthlyDeposits.userId, user.id), eq(monthlyDeposits.month, targetMonth.start)),
 		with: {
 			items: {
 				with: {
@@ -176,31 +190,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})
 		.from(expenses)
 		.leftJoin(budgetCategories, eq(expenses.categoryId, budgetCategories.id))
-		.where(and(gte(expenses.date, targetMonthStart), sql`${expenses.date} <= ${targetMonthEnd}`))
+		.where(and(gte(expenses.date, targetMonth.start), sql`${expenses.date} <= ${targetMonth.end}`))
 		.groupBy(expenses.categoryId, budgetCategories.name, budgetCategories.type);
-
-	// Get all budget categories with account info for expense settlement
-	const categoriesWithAccounts = await db.query.budgetCategories.findMany({
-		with: {
-			account: true
-		}
-	});
 
 	// Check if all users have completed their deposits for this month
 	const allDeposits = await db.query.monthlyDeposits.findMany({
-		where: eq(monthlyDeposits.month, targetMonthStart),
+		where: eq(monthlyDeposits.month, targetMonth.start),
 		with: { items: true }
 	});
 	const allDepositsCompleted = allDeposits.length > 0 && allDeposits.every((d) => d.isCompleted);
 
-	// 지출 정산 항목 생성 (이미 존재하면 스킵)
-	await generateExpenseSettlements(targetMonthStart);
+	// 지출 정산 항목을 최신 지출 내역과 동기화
+	await generateExpenseSettlements(targetMonth.start, targetMonth.end);
 
 	// Get expense settlements for this month (지출 정산 체크리스트)
 	// 현재 사용자가 송금해야 하는 항목만 조회 (fromUser = 현재 사용자)
 	const settlements = await db.query.expenseSettlements.findMany({
 		where: and(
-			eq(expenseSettlements.month, targetMonthStart),
+			eq(expenseSettlements.month, targetMonth.start),
 			eq(expenseSettlements.fromUser, user.username)
 		),
 		with: {
@@ -292,7 +299,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			total: Number(e.total)
 		})),
 		budgetTypes: BUDGET_TYPES,
-		targetMonth: getTargetMonthLabel(),
+		targetMonth: targetMonth.label,
 		defaultDeduction: Number(currentUser?.defaultDeduction || 0),
 		currentUsername: user.username,
 		// 지출 정산 관련 데이터
@@ -316,11 +323,11 @@ export const actions: Actions = {
 			return fail(400, { error: '월급을 입력해주세요.' });
 		}
 
-		const targetMonthStart = getTargetMonthStart();
+		const targetMonth = getSettlementMonth();
 
 		// Check if deposit already exists for target month
 		const existing = await db.query.monthlyDeposits.findFirst({
-			where: and(eq(monthlyDeposits.userId, user.id), eq(monthlyDeposits.month, targetMonthStart))
+			where: and(eq(monthlyDeposits.userId, user.id), eq(monthlyDeposits.month, targetMonth.start))
 		});
 
 		if (existing) {
@@ -342,30 +349,32 @@ export const actions: Actions = {
 		const savingsAmount = Number(salary) - Number(deduction);
 
 		try {
-			// Create monthly deposit for target month (지난달)
-			const [deposit] = await db
-				.insert(monthlyDeposits)
-				.values({
-					userId: user.id,
-					month: targetMonthStart,
-					salary: String(salary),
-					totalBudget: String(totalBudget),
-					savingsAmount: String(Math.max(0, savingsAmount)),
+			await db.transaction(async (tx) => {
+				// Create monthly deposit for target month (지난달)
+				const [deposit] = await tx
+					.insert(monthlyDeposits)
+					.values({
+						userId: user.id,
+						month: targetMonth.start,
+						salary: String(salary),
+						totalBudget: String(totalBudget),
+						savingsAmount: String(Math.max(0, savingsAmount)),
+						isCompleted: false
+					})
+					.returning();
+
+				// Create deposit items only for user's responsible categories
+				const depositItemsData = userCategories.map((cat) => ({
+					depositId: deposit.id,
+					categoryId: cat.id,
+					amount: cat.type === 'savings' ? String(Math.max(0, savingsAmount)) : cat.allocatedAmount,
 					isCompleted: false
-				})
-				.returning();
+				}));
 
-			// Create deposit items only for user's responsible categories
-			const depositItemsData = userCategories.map((cat) => ({
-				depositId: deposit.id,
-				categoryId: cat.id,
-				amount: cat.type === 'savings' ? String(Math.max(0, savingsAmount)) : cat.allocatedAmount,
-				isCompleted: false
-			}));
-
-			if (depositItemsData.length > 0) {
-				await db.insert(depositItems).values(depositItemsData);
-			}
+				if (depositItemsData.length > 0) {
+					await tx.insert(depositItems).values(depositItemsData);
+				}
+			});
 
 			return { success: true, message: '정산이 생성되었습니다.' };
 		} catch (e) {
@@ -381,44 +390,85 @@ export const actions: Actions = {
 		}
 
 		const formData = await request.formData();
-		const itemId = formData.get('itemId');
-		const isCompleted = formData.get('isCompleted') === 'true';
+		const itemId = Number(formData.get('itemId'));
+		const completionValue = formData.get('isCompleted');
 
-		if (!itemId) {
-			return fail(400, { error: '항목 ID가 필요합니다.' });
+		if (!Number.isInteger(itemId) || itemId <= 0) {
+			return fail(400, { error: '올바른 항목 ID가 필요합니다.' });
 		}
+		if (completionValue !== 'true' && completionValue !== 'false') {
+			return fail(400, { error: '올바른 완료 상태가 필요합니다.' });
+		}
+		const isCompleted = completionValue === 'true';
+		const targetMonth = getSettlementMonth();
 
 		try {
-			await db
-				.update(depositItems)
-				.set({
-					isCompleted,
-					completedAt: isCompleted ? new Date() : null
-				})
-				.where(eq(depositItems.id, Number(itemId)));
-
-			// 사용자가 담당하는 모든 입금 항목이 완료되면 monthlyDeposits.isCompleted 동기화
-			const targetMonthStart = getTargetMonthStart();
-			const deposit = await db.query.monthlyDeposits.findFirst({
-				where: and(
-					eq(monthlyDeposits.userId, user.id),
-					eq(monthlyDeposits.month, targetMonthStart)
-				),
-				with: {
-					items: {
-						with: { category: true }
+			const updated = await db.transaction(async (tx) => {
+				const item = await tx.query.depositItems.findFirst({
+					where: eq(depositItems.id, itemId),
+					with: {
+						deposit: true,
+						category: true
 					}
-				}
-			});
+				});
 
-			if (deposit) {
+				const isResponsibleCategory =
+					item?.category?.type === 'savings' || item?.category?.depositManager === user.username;
+				if (
+					!item?.deposit ||
+					item.deposit.userId !== user.id ||
+					item.deposit.month !== targetMonth.start ||
+					!isResponsibleCategory
+				) {
+					return false;
+				}
+				const [lockedDeposit] = await tx
+					.select({ id: monthlyDeposits.id })
+					.from(monthlyDeposits)
+					.where(
+						and(
+							eq(monthlyDeposits.id, item.depositId),
+							eq(monthlyDeposits.userId, user.id),
+							eq(monthlyDeposits.month, targetMonth.start)
+						)
+					)
+					.for('update');
+				if (!lockedDeposit) {
+					return false;
+				}
+
+				await tx
+					.update(depositItems)
+					.set({
+						isCompleted,
+						completedAt: isCompleted ? new Date() : null
+					})
+					.where(and(eq(depositItems.id, itemId), eq(depositItems.depositId, item.depositId)));
+
+				const deposit = await tx.query.monthlyDeposits.findFirst({
+					where: and(
+						eq(monthlyDeposits.id, item.depositId),
+						eq(monthlyDeposits.userId, user.id),
+						eq(monthlyDeposits.month, targetMonth.start)
+					),
+					with: {
+						items: {
+							with: { category: true }
+						}
+					}
+				});
+
+				if (!deposit) {
+					return false;
+				}
+
 				const userItems = deposit.items.filter(
 					(item) =>
 						item.category?.type === 'savings' || item.category?.depositManager === user.username
 				);
 				const allCompleted = userItems.length > 0 && userItems.every((item) => item.isCompleted);
 				if (allCompleted !== deposit.isCompleted) {
-					await db
+					await tx
 						.update(monthlyDeposits)
 						.set({
 							isCompleted: allCompleted,
@@ -426,6 +476,14 @@ export const actions: Actions = {
 						})
 						.where(eq(monthlyDeposits.id, deposit.id));
 				}
+
+				return true;
+			});
+
+			if (!updated) {
+				return fail(404, {
+					error: '현재 월 정산 항목을 찾을 수 없습니다. 화면을 새로고침해주세요.'
+				});
 			}
 
 			return { success: true };
@@ -441,13 +499,21 @@ export const actions: Actions = {
 		}
 
 		const formData = await request.formData();
-		const salary = formData.get('salary');
-		const deduction = formData.get('deduction') || '0';
-		const depositId = formData.get('depositId');
+		const salary = Number(formData.get('salary'));
+		const deduction = Number(formData.get('deduction') || 0);
+		const depositId = Number(formData.get('depositId'));
 
-		if (!salary || !depositId) {
-			return fail(400, { error: '필수 정보가 누락되었습니다.' });
+		if (
+			!Number.isFinite(salary) ||
+			salary <= 0 ||
+			!Number.isFinite(deduction) ||
+			deduction < 0 ||
+			!Number.isInteger(depositId) ||
+			depositId <= 0
+		) {
+			return fail(400, { error: '올바른 월급과 차감액을 입력해주세요.' });
 		}
+		const targetMonth = getSettlementMonth();
 
 		try {
 			// Get all categories for recalculation (shared)
@@ -464,27 +530,47 @@ export const actions: Actions = {
 			// 저축 = 월급 - 차감액
 			const savingsAmount = Number(salary) - Number(deduction);
 
-			// Update deposit
-			await db
-				.update(monthlyDeposits)
-				.set({
-					salary: String(salary),
-					savingsAmount: String(Math.max(0, savingsAmount))
-				})
-				.where(and(eq(monthlyDeposits.id, Number(depositId)), eq(monthlyDeposits.userId, user.id)));
-
-			// Update savings category item amount
 			const savingsCategory = userCategories.find((c) => c.type === 'savings');
-			if (savingsCategory) {
-				await db
-					.update(depositItems)
-					.set({ amount: String(Math.max(0, savingsAmount)) })
+			const updated = await db.transaction(async (tx) => {
+				const deposits = await tx
+					.update(monthlyDeposits)
+					.set({
+						salary: String(salary),
+						totalBudget: String(totalBudget),
+						savingsAmount: String(Math.max(0, savingsAmount))
+					})
 					.where(
 						and(
-							eq(depositItems.depositId, Number(depositId)),
-							eq(depositItems.categoryId, savingsCategory.id)
+							eq(monthlyDeposits.id, depositId),
+							eq(monthlyDeposits.userId, user.id),
+							eq(monthlyDeposits.month, targetMonth.start)
 						)
-					);
+					)
+					.returning({ id: monthlyDeposits.id });
+
+				if (deposits.length === 0) {
+					return false;
+				}
+
+				if (savingsCategory) {
+					await tx
+						.update(depositItems)
+						.set({ amount: String(Math.max(0, savingsAmount)) })
+						.where(
+							and(
+								eq(depositItems.depositId, depositId),
+								eq(depositItems.categoryId, savingsCategory.id)
+							)
+						);
+				}
+
+				return true;
+			});
+
+			if (!updated) {
+				return fail(404, {
+					error: '현재 월 정산을 찾을 수 없습니다. 화면을 새로고침해주세요.'
+				});
 			}
 
 			return { success: true, message: '월급이 업데이트되었습니다.' };
@@ -500,32 +586,44 @@ export const actions: Actions = {
 		}
 
 		const formData = await request.formData();
-		const depositId = formData.get('depositId');
+		const depositId = Number(formData.get('depositId'));
 
-		if (!depositId) {
-			return fail(400, { error: '예산 입금 ID가 필요합니다.' });
+		if (!Number.isInteger(depositId) || depositId <= 0) {
+			return fail(400, { error: '올바른 예산 입금 ID가 필요합니다.' });
 		}
+		const targetMonth = getSettlementMonth();
 
 		try {
-			// Get the deposit to find the month
-			const deposit = await db.query.monthlyDeposits.findFirst({
-				where: and(eq(monthlyDeposits.id, Number(depositId)), eq(monthlyDeposits.userId, user.id))
+			const deleted = await db.transaction(async (tx) => {
+				const [deposit] = await tx
+					.select({ id: monthlyDeposits.id })
+					.from(monthlyDeposits)
+					.where(
+						and(
+							eq(monthlyDeposits.id, depositId),
+							eq(monthlyDeposits.userId, user.id),
+							eq(monthlyDeposits.month, targetMonth.start)
+						)
+					)
+					.for('update');
+
+				if (!deposit) {
+					return false;
+				}
+
+				await tx.delete(depositItems).where(eq(depositItems.depositId, depositId));
+				await tx
+					.delete(monthlyDeposits)
+					.where(and(eq(monthlyDeposits.id, depositId), eq(monthlyDeposits.userId, user.id)));
+
+				return true;
 			});
 
-			if (!deposit) {
-				return fail(404, { error: '정산을 찾을 수 없습니다.' });
+			if (!deleted) {
+				return fail(404, {
+					error: '현재 월 정산을 찾을 수 없습니다. 화면을 새로고침해주세요.'
+				});
 			}
-
-			// Delete expense settlements for this month
-			await db.delete(expenseSettlements).where(eq(expenseSettlements.month, deposit.month));
-
-			// Delete all deposit items
-			await db.delete(depositItems).where(eq(depositItems.depositId, Number(depositId)));
-
-			// Then delete the deposit itself
-			await db
-				.delete(monthlyDeposits)
-				.where(and(eq(monthlyDeposits.id, Number(depositId)), eq(monthlyDeposits.userId, user.id)));
 
 			return { success: true, message: '예산 입금이 초기화되었습니다.' };
 		} catch (e) {

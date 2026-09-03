@@ -54,7 +54,9 @@ sw.addEventListener('activate', (event) => {
 	);
 });
 
-// Fetch event - serve from cache, fall back to network
+// Fetch event - precached assets are cache-first; dynamic data is network-first.
+// SvelteKit client navigations and invalidateAll() use __data.json GET requests,
+// so serving every non-navigation GET from cache can keep page data stale forever.
 sw.addEventListener('fetch', (event) => {
 	const url = new URL(event.request.url);
 
@@ -78,55 +80,53 @@ sw.addEventListener('fetch', (event) => {
 		return;
 	}
 
-	// For navigation requests, try network first
-	if (event.request.mode === 'navigate') {
-		event.respondWith(
-			(async () => {
-				try {
-					const response = await fetch(event.request);
-					// Cache the response for offline use
-					if (response.status === 200) {
-						const cache = await caches.open(CACHE);
-						cache.put(event.request, response.clone());
-					}
-					return response;
-				} catch {
-					// Offline - return cached version
-					const cachedResponse = await caches.match(event.request);
-					if (cachedResponse) {
-						return cachedResponse;
-					}
-					const fallback = await caches.match('/');
-					return fallback || new Response('Offline', { status: 503 });
-				}
-			})()
-		);
-		return;
+	event.respondWith(handleGetRequest(event.request, url));
+});
+
+async function handleGetRequest(request: Request, url: URL): Promise<Response> {
+	const cache = await caches.open(CACHE);
+
+	// Build output and static files are immutable for this deployment.
+	if (ASSETS.includes(url.pathname)) {
+		const cachedAsset = await cache.match(url.pathname);
+		if (cachedAsset) {
+			return cachedAsset;
+		}
 	}
 
-	// For other requests, try cache first
-	event.respondWith(
-		(async () => {
-			const cachedResponse = await caches.match(event.request);
-			if (cachedResponse) {
-				return cachedResponse;
-			}
+	// Page HTML, SvelteKit data requests and other dynamic GETs must prefer
+	// the network so month changes and form-action updates are visible at once.
+	try {
+		const response = await fetch(request);
+		if (!(response instanceof Response)) {
+			throw new Error('Invalid network response');
+		}
 
+		const cacheControl = response.headers.get('cache-control')?.toLowerCase() || '';
+		if (response.status === 200 && !cacheControl.includes('no-store')) {
 			try {
-				const response = await fetch(event.request);
-				// Cache successful responses
-				if (response.status === 200) {
-					const cache = await caches.open(CACHE);
-					cache.put(event.request, response.clone());
-				}
-				return response;
+				await cache.put(request, response.clone());
 			} catch {
-				// Return offline fallback
-				return new Response('Offline', { status: 503 });
+				// A cache write failure must not hide a valid network response.
+				console.warn('Failed to cache:', request.url);
 			}
-		})()
-	);
-});
+		}
+
+		return response;
+	} catch (error) {
+		const cachedResponse = await cache.match(request);
+		if (cachedResponse) {
+			return cachedResponse;
+		}
+
+		if (request.mode === 'navigate') {
+			const fallback = await cache.match('/');
+			return fallback || new Response('Offline', { status: 503 });
+		}
+
+		throw error;
+	}
+}
 
 // Handle expense requests with offline support
 async function handleExpenseRequest(request: Request): Promise<Response> {
@@ -159,7 +159,7 @@ sw.addEventListener('message', (event) => {
 });
 
 // Sync pending expenses when back online
-async function syncPendingExpenses(expenses: any[]) {
+async function syncPendingExpenses(expenses: unknown[]) {
 	for (const expense of expenses) {
 		try {
 			await fetch('/api/expenses', {
@@ -175,9 +175,10 @@ async function syncPendingExpenses(expenses: any[]) {
 }
 
 // Background sync for pending expenses
-sw.addEventListener('sync', (event: any) => {
-	if (event.tag === 'sync-expenses') {
-		event.waitUntil(
+sw.addEventListener('sync', (event) => {
+	const syncEvent = event as Event & { tag: string; waitUntil(promise: Promise<unknown>): void };
+	if (syncEvent.tag === 'sync-expenses') {
+		syncEvent.waitUntil(
 			// Get pending expenses from IndexedDB and sync
 			sw.clients.matchAll().then((clients) => {
 				clients.forEach((client) => {
