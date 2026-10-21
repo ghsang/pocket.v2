@@ -21,6 +21,10 @@ export const BUDGET_TYPES = {
 
 export type BudgetType = keyof typeof BUDGET_TYPES;
 
+// These tables are accessed only by the trusted server DATABASE_URL connection.
+// RLS intentionally has no client policies: Kakao sessions are checked in hooks.server.ts,
+// and neither anon nor authenticated should access household data via the Data API.
+
 // Bank accounts for deposits
 export const bankAccounts = pgTable('bank_accounts', {
 	id: serial('id').primaryKey(),
@@ -29,7 +33,7 @@ export const bankAccounts = pgTable('bank_accounts', {
 	accountHolder: text('account_holder').notNull(), // 예금주
 	alias: text('alias'), // 별칭 (생활비 통장, 저축 통장 등)
 	createdAt: timestamp('created_at').defaultNow()
-});
+}).enableRLS();
 
 export const users = pgTable('users', {
 	id: serial('id').primaryKey(),
@@ -44,7 +48,7 @@ export const users = pgTable('users', {
 	accountNumber: text('account_number'),
 	createdAt: timestamp('created_at').defaultNow(),
 	updatedAt: timestamp('updated_at').defaultNow()
-});
+}).enableRLS();
 
 export const budgetCategories = pgTable('budget_categories', {
 	id: serial('id').primaryKey(),
@@ -56,7 +60,7 @@ export const budgetCategories = pgTable('budget_categories', {
 	accountId: integer('account_id').references(() => bankAccounts.id), // 입금 계좌
 	depositManager: text('deposit_manager'), // 입금 담당자
 	createdAt: timestamp('created_at').defaultNow()
-});
+}).enableRLS();
 
 export const paymentMethods = pgTable('payment_methods', {
 	id: serial('id').primaryKey(),
@@ -68,7 +72,7 @@ export const paymentMethods = pgTable('payment_methods', {
 	owner: text('owner'), // 소유자 (권혁상 or 이현경)
 	isDefault: boolean('is_default').default(false),
 	createdAt: timestamp('created_at').defaultNow()
-});
+}).enableRLS();
 
 export const expenses = pgTable('expenses', {
 	id: serial('id').primaryKey(),
@@ -82,7 +86,7 @@ export const expenses = pgTable('expenses', {
 	paymentMethodId: integer('payment_method_id').references(() => paymentMethods.id),
 	isOfflineSync: boolean('is_offline_sync').default(false), // Flag for offline-synced expenses
 	createdAt: timestamp('created_at').defaultNow()
-});
+}).enableRLS();
 
 // Monthly deposits tracking
 export const monthlyDeposits = pgTable(
@@ -101,7 +105,7 @@ export const monthlyDeposits = pgTable(
 		createdAt: timestamp('created_at').defaultNow()
 	},
 	(table) => [uniqueIndex('monthly_deposits_user_month_idx').on(table.userId, table.month)]
-);
+).enableRLS();
 
 // Individual deposit items per category
 export const depositItems = pgTable('deposit_items', {
@@ -116,7 +120,7 @@ export const depositItems = pgTable('deposit_items', {
 	isCompleted: boolean('is_completed').default(false),
 	completedAt: timestamp('completed_at'),
 	createdAt: timestamp('created_at').defaultNow()
-});
+}).enableRLS();
 
 // Expense settlement items (지출 정산 - 계좌 담당자가 지출자에게 송금)
 export const expenseSettlements = pgTable('expense_settlements', {
@@ -131,7 +135,7 @@ export const expenseSettlements = pgTable('expense_settlements', {
 	isCompleted: boolean('is_completed').default(false),
 	completedAt: timestamp('completed_at'),
 	createdAt: timestamp('created_at').defaultNow()
-});
+}).enableRLS();
 
 // 사용자별 카테고리 입금 계좌 (지출 정산 시 받을 계좌)
 export const userCategoryAccounts = pgTable(
@@ -149,7 +153,7 @@ export const userCategoryAccounts = pgTable(
 		updatedAt: timestamp('updated_at').defaultNow()
 	},
 	(table) => [uniqueIndex('user_category_accounts_idx').on(table.username, table.categoryId)]
-);
+).enableRLS();
 
 // Offline pending expenses (for PWA sync)
 export const pendingExpenses = pgTable('pending_expenses', {
@@ -165,7 +169,7 @@ export const pendingExpenses = pgTable('pending_expenses', {
 	paymentMethodId: integer('payment_method_id'),
 	syncedAt: timestamp('synced_at'),
 	createdAt: timestamp('created_at').defaultNow()
-});
+}).enableRLS();
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
